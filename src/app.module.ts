@@ -1,8 +1,15 @@
-import { Module } from '@nestjs/common';
+import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule, TypeOrmModuleOptions } from '@nestjs/typeorm';
 import configuration from './config/configuration';
 import { validationSchema } from './config/validation.schema';
+import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
+import { RolesGuard } from './common/guards/roles.guard';
+import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
+import { RequestLoggerMiddleware } from './common/middleware/request-logger.middleware';
+import { AuthModule } from './modules/auth/auth.module';
+import { UsersModule } from './modules/users/users.module';
 import { HealthModule } from './modules/health/health.module';
 
 @Module({
@@ -29,7 +36,18 @@ import { HealthModule } from './modules/health/health.module';
         logging: config.get<boolean>('database.logging'),
       }),
     }),
+    AuthModule,
+    UsersModule,
     HealthModule,
   ],
+  providers: [
+    { provide: APP_GUARD, useClass: JwtAuthGuard },
+    { provide: APP_GUARD, useClass: RolesGuard },
+    { provide: APP_INTERCEPTOR, useClass: LoggingInterceptor },
+  ],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer): void {
+    consumer.apply(RequestLoggerMiddleware).forRoutes('*');
+  }
+}
