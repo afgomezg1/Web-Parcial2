@@ -119,7 +119,7 @@ export class ItemsService {
     });
 
     if (activeLoans > 0) {
-      throw new ConflictException('No se puede eliminar un item con préstamo activo');
+      throw new ConflictException('No se puede eliminar un item con préstamo activo o vencido');
     }
 
     item.isActive = false;
@@ -132,7 +132,7 @@ export class ItemsService {
     const unavailableLoans = await this.loansRepo.count({
       where: {
         item: { id: itemId },
-        status: In([LoanStatus.ACTIVE, LoanStatus.OVERDUE, LoanStatus.LOST]),
+        status: In([LoanStatus.ACTIVE, LoanStatus.OVERDUE]),
       },
     });
 

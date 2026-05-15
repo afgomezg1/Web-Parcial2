@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, IsNull, LessThan, Repository } from 'typeorm';
 import { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { Item } from '../items/entities/item.entity';
 import { User, UserRole } from '../users/entities/user.entity';
@@ -60,30 +60,20 @@ export class LoansService {
     const loanedAt = new Date();
     const dueAt = new Date(dto.dueAt);
 
-    if (Number.isNaN(dueAt.getTime())) {
-      throw new BadRequestException('dueAt debe ser una fecha válida');
-    }
+    this.validateDates(loanedAt, dueAt);
 
-    if (dueAt <= loanedAt) {
-      throw new BadRequestException('dueAt debe ser posterior a loanedAt');
-    }
-
-    const maxLoanDays = this.config.get<number>('loans.maxLoanDays', 30);
-    const maxDueAt = new Date(loanedAt.getTime() + maxLoanDays * DAY_MS);
-
-    if (dueAt > maxDueAt) {
-      throw new BadRequestException(`El préstamo no puede superar ${maxLoanDays} días`);
-    }
-
-    const unavailableLoans = await this.loansRepo.count({
+    const blockingLoan = await this.loansRepo.findOne({
       where: {
         item: { id: item.id },
-        status: In([LoanStatus.ACTIVE, LoanStatus.OVERDUE, LoanStatus.LOST]),
+        status: In([LoanStatus.ACTIVE, LoanStatus.OVERDUE]),
       },
+      relations: ['item'],
     });
 
-    if (unavailableLoans > 0) {
-      throw new ConflictException('El item no está disponible');
+    if (blockingLoan) {
+      throw new ConflictException(
+        `El item no está disponible. Bloqueado por el préstamo ${blockingLoan.id}`,
+      );
     }
 
     const activeLoans = await this.loansRepo.count({
@@ -96,7 +86,9 @@ export class LoansService {
     const maxActiveLoans = this.config.get<number>('loans.maxActivePerUser', 3);
 
     if (activeLoans >= maxActiveLoans) {
-      throw new ConflictException(`El usuario ya tiene ${maxActiveLoans} préstamos activos`);
+      throw new ConflictException(
+        `El usuario ya tiene ${maxActiveLoans} préstamos activos o vencidos`,
+      );
     }
 
     const loan = this.loansRepo.create({
@@ -110,6 +102,7 @@ export class LoansService {
     });
 
     const saved = await this.loansRepo.save(loan);
+
     return this.findOne(saved.id, {
       id: user.id,
       email: user.email,
@@ -118,6 +111,8 @@ export class LoansService {
   }
 
   async findAll(query: FindLoansQueryDto, actor: AuthenticatedUser) {
+    await this.refreshOverdueLoans();
+
     const effectiveUserId = actor.role === UserRole.MEMBER ? actor.id : query.userId;
 
     const loans = await this.loansRepo.find({
@@ -134,6 +129,8 @@ export class LoansService {
   }
 
   async findOne(id: string, actor: AuthenticatedUser) {
+    await this.refreshOverdueLoans();
+
     const loan = await this.loansRepo.findOne({
       where: { id },
       relations: ['user', 'item'],
@@ -151,6 +148,8 @@ export class LoansService {
   }
 
   async returnLoan(id: string) {
+    await this.refreshOverdueLoans();
+
     const loan = await this.loansRepo.findOne({
       where: { id },
       relations: ['user', 'item'],
@@ -160,24 +159,24 @@ export class LoansService {
       throw new NotFoundException(`Préstamo ${id} no encontrado`);
     }
 
-    if (loan.status === LoanStatus.RETURNED) {
-      throw new ConflictException('El préstamo ya fue devuelto');
-    }
-
-    if (loan.status === LoanStatus.LOST) {
-      throw new ConflictException('Un préstamo marcado como perdido no se devuelve');
+    if (loan.status === LoanStatus.RETURNED || loan.status === LoanStatus.LOST) {
+      throw new BadRequestException('No se puede devolver un préstamo en estado returned o lost');
     }
 
     const returnedAt = new Date();
+
     loan.returnedAt = returnedAt;
-    loan.status = LoanStatus.RETURNED;
     loan.fineAmount = this.calculateFine(loan.dueAt, returnedAt);
+    loan.status = LoanStatus.RETURNED;
 
     const saved = await this.loansRepo.save(loan);
+
     return this.toWithRelationsDto(saved);
   }
 
   async markLost(id: string) {
+    await this.refreshOverdueLoans();
+
     const loan = await this.loansRepo.findOne({
       where: { id },
       relations: ['user', 'item'],
@@ -187,15 +186,35 @@ export class LoansService {
       throw new NotFoundException(`Préstamo ${id} no encontrado`);
     }
 
-    if (loan.status === LoanStatus.RETURNED) {
-      throw new ConflictException('No se puede marcar como perdido un préstamo devuelto');
+    if (loan.status === LoanStatus.RETURNED || loan.status === LoanStatus.LOST) {
+      throw new BadRequestException(
+        'No se puede marcar como perdido un préstamo en estado returned o lost',
+      );
     }
 
     loan.status = LoanStatus.LOST;
     loan.returnedAt = null;
 
     const saved = await this.loansRepo.save(loan);
+
     return this.toWithRelationsDto(saved);
+  }
+
+  private validateDates(loanedAt: Date, dueAt: Date): void {
+    if (Number.isNaN(dueAt.getTime())) {
+      throw new BadRequestException('dueAt debe ser una fecha válida');
+    }
+
+    if (dueAt <= loanedAt) {
+      throw new BadRequestException('dueAt debe ser posterior a loanedAt');
+    }
+
+    const maxLoanDays = this.config.get<number>('loans.maxLoanDays', 30);
+    const maxDueAt = new Date(loanedAt.getTime() + maxLoanDays * DAY_MS);
+
+    if (dueAt > maxDueAt) {
+      throw new BadRequestException(`La ventana máxima de préstamo es de ${maxLoanDays} días`);
+    }
   }
 
   private calculateFine(dueAt: Date, returnedAt: Date): string {
@@ -203,10 +222,24 @@ export class LoansService {
       return '0.00';
     }
 
-    const lateDays = Math.ceil((returnedAt.getTime() - dueAt.getTime()) / DAY_MS);
+    const daysOverdue = Math.ceil((returnedAt.getTime() - dueAt.getTime()) / DAY_MS);
+
     const dailyFineRate = this.config.get<number>('loans.dailyFineRate', 0.5);
 
-    return (lateDays * dailyFineRate).toFixed(2);
+    return (daysOverdue * dailyFineRate).toFixed(2);
+  }
+
+  private async refreshOverdueLoans(): Promise<void> {
+    await this.loansRepo.update(
+      {
+        status: LoanStatus.ACTIVE,
+        returnedAt: IsNull(),
+        dueAt: LessThan(new Date()),
+      },
+      {
+        status: LoanStatus.OVERDUE,
+      },
+    );
   }
 
   toBasicDto(loan: Loan) {
