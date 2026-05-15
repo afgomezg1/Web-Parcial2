@@ -5,7 +5,7 @@ import * as bcrypt from 'bcrypt';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { UsersService } from '../users/users.service';
-import { User } from '../users/entities/user.entity';
+import { User, UserRole } from '../users/entities/user.entity';
 
 @Injectable()
 export class AuthService {
@@ -16,7 +16,11 @@ export class AuthService {
   ) {}
 
   async register(dto: RegisterDto) {
-    const user = await this.usersService.create(dto);
+    const user = await this.usersService.create({
+      ...dto,
+      role: UserRole.MEMBER,
+    });
+
     return this.buildAuthResponse(user);
   }
 
@@ -55,7 +59,6 @@ export class AuthService {
 
     return {
       accessToken,
-      tokenType: 'Bearer',
       user: this.usersService.toBasicDto(user),
     };
   }
