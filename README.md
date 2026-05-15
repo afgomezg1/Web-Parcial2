@@ -1,4 +1,4 @@
-# Library Loans API — Scaffold de examen parcial
+# Library Loans API — Scaffold de examen parcial 
 
 Scaffold base para el examen parcial del curso **ISIS 3710 — Programación con Tecnologías Web**.
 
