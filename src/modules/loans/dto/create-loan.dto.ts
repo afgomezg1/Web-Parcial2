@@ -12,10 +12,6 @@ export class CreateLoanDto {
   @IsNotEmpty()
   itemId!: string;
 
-  @ApiProperty({ example: '2026-05-15T10:00:00.000Z' })
-  @IsDateString()
-  loanedAt!: string;
-
   @ApiProperty({ example: '2026-05-22T10:00:00.000Z' })
   @IsDateString()
   dueAt!: string;

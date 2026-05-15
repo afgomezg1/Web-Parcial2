@@ -16,4 +16,9 @@ export class ItemBasicDto {
 
   @ApiProperty()
   isActive!: boolean;
+
+  @ApiProperty({
+    description: 'true si el item no tiene préstamo activo, vencido o perdido.',
+  })
+  isAvailable!: boolean;
 }
