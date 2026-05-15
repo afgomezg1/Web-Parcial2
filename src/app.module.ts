@@ -11,6 +11,8 @@ import { RequestLoggerMiddleware } from './common/middleware/request-logger.midd
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
 import { HealthModule } from './modules/health/health.module';
+import { ItemsModule } from './modules/items/items.module';
+import { LoansModule } from './modules/loans/loans.module';
 
 @Module({
   imports: [
@@ -39,6 +41,8 @@ import { HealthModule } from './modules/health/health.module';
     AuthModule,
     UsersModule,
     HealthModule,
+    ItemsModule,
+    LoansModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },
